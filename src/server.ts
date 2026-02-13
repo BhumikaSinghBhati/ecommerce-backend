@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import app from "./app";
 import connectDB from "./config/db";
+import { connectRedis } from "./config/redis";
 
 
 dotenv.config();
@@ -8,6 +9,7 @@ dotenv.config();
 const PORT = process.env.PORT;
 
 connectDB();
+connectRedis();
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

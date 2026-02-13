@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import Cart from "../models/cart.model";
 import Product from "../models/product.model";
+import redisClient from "../config/redis";
 
 /* =====================
    ADD TO CART
@@ -15,58 +16,59 @@ export const addToCart = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    let cart = await Cart.findOne({ user: userId });
+    const cartKey = `cart:${userId}`;
 
-    if (!cart) {
-      cart = await Cart.create({
-        user: userId,
-        items: [],
-      });
-    }
+    // 🔥 HINCRBY automatically adds field if not exists
+    await redisClient.hIncrBy(cartKey, productId, quantity);
 
-    const itemIndex = cart.items.findIndex(
-      (item) => item.product.toString() === productId
-    );
-
-    if (itemIndex > -1) {
-      cart.items[itemIndex].quantity += quantity;
-    } else {
-      cart.items.push({
-        product: product._id,
-        quantity,
-        price: product.price,
-      });
-    }
-
-    cart.totalAmount = cart.items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0
-    );
-
-    await cart.save();
-
-    res.status(200).json(cart);
-  } catch (error) {
+    res.json({ message: "Item added to cart" });
+  } catch {
     res.status(500).json({ message: "Add to cart failed" });
   }
 };
-
+/* =====================
+   GET CART (CACHE FIRST)
+===================== */
 /* =====================
    GET CART
 ===================== */
 export const getCart = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user._id;
+    const cartKey = `cart:${userId}`;
 
-    const cart = await Cart.findOne({ user: userId }).populate(
-      "items.product"
-    );
+    const cartItems = await redisClient.hGetAll(cartKey);
 
-    if (!cart) {
+    if (!cartItems || Object.keys(cartItems).length === 0) {
       return res.json({ items: [], totalAmount: 0 });
     }
 
-    res.json(cart);
+    const productIds = Object.keys(cartItems);
+
+    const products = await Product.find({
+      _id: { $in: productIds },
+    });
+
+    let totalAmount = 0;
+
+    const items = products.map((product) => {
+      const quantity = Number(cartItems[product._id.toString()]);
+      const subtotal = quantity * product.price;
+
+      totalAmount += subtotal;
+
+      return {
+        product,
+        quantity,
+        price: product.price,
+        subtotal,
+      };
+    });
+
+    res.json({
+      items,
+      totalAmount,
+    });
   } catch {
     res.status(500).json({ message: "Fetch cart failed" });
   }
@@ -80,30 +82,20 @@ export const updateCartItem = async (req: Request, res: Response) => {
     const userId = (req as any).user._id;
     const { productId, quantity } = req.body;
 
-    const cart = await Cart.findOne({ user: userId });
-    if (!cart) return res.status(404).json({ message: "Cart not found" });
+    const cartKey = `cart:${userId}`;
 
-    const item = cart.items.find(
-      (item) => item.product.toString() === productId
-    );
-
-    if (!item) {
-      return res.status(404).json({ message: "Item not found in cart" });
+    if (quantity <= 0) {
+      await redisClient.hDel(cartKey, productId);
+    } else {
+      await redisClient.hSet(cartKey, productId, quantity);
     }
 
-    item.quantity = quantity;
-
-    cart.totalAmount = cart.items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0
-    );
-
-    await cart.save();
-    res.json(cart);
+    res.json({ message: "Cart updated" });
   } catch {
-    res.status(500).json({ message: "Update cart failed" });
+    res.status(500).json({ message: "Update failed" });
   }
 };
+
 
 /* =====================
    REMOVE ITEM
@@ -113,24 +105,16 @@ export const removeCartItem = async (req: Request, res: Response) => {
     const userId = (req as any).user._id;
     const { productId } = req.params;
 
-    const cart = await Cart.findOne({ user: userId });
-    if (!cart) return res.status(404).json({ message: "Cart not found" });
+    const cartKey = `cart:${userId}`;
 
-    cart.items = cart.items.filter(
-      (item) => item.product.toString() !== productId
-    );
+    await redisClient.hDel(cartKey, productId);
 
-    cart.totalAmount = cart.items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0
-    );
-
-    await cart.save();
-    res.json(cart);
+    res.json({ message: "Item removed" });
   } catch {
-    res.status(500).json({ message: "Remove item failed" });
+    res.status(500).json({ message: "Remove failed" });
   }
 };
+
 
 /* =====================
    CLEAR CART
@@ -139,13 +123,10 @@ export const clearCart = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user._id;
 
-    await Cart.findOneAndUpdate(
-      { user: userId },
-      { items: [], totalAmount: 0 }
-    );
+    await redisClient.del(`cart:${userId}`);
 
     res.json({ message: "Cart cleared" });
   } catch {
-    res.status(500).json({ message: "Clear cart failed" });
+    res.status(500).json({ message: "Clear failed" });
   }
 };

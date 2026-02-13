@@ -9,7 +9,9 @@ export interface IOrder extends Document {
   }[];
   totalAmount: number;
   status: string;
-  createdAt: Date;
+  paymentStatus: string;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
 }
 
 const orderSchema = new Schema<IOrder>(
@@ -26,14 +28,8 @@ const orderSchema = new Schema<IOrder>(
           ref: "Product",
           required: true,
         },
-        quantity: {
-          type: Number,
-          required: true,
-        },
-        price: {
-          type: Number,
-          required: true,
-        },
+        quantity: Number,
+        price: Number,
       },
     ],
     totalAmount: {
@@ -45,6 +41,13 @@ const orderSchema = new Schema<IOrder>(
       enum: ["pending", "confirmed", "shipped", "delivered"],
       default: "pending",
     },
+    paymentStatus: {
+      type: String,
+      enum: ["pending", "paid", "failed"],
+      default: "pending",
+    },
+    razorpayOrderId: String,
+    razorpayPaymentId: String,
   },
   { timestamps: true }
 );
